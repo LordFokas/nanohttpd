@@ -62,7 +62,7 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
         CLOSED
     }
 
-    public class WebSocket {
+    public static abstract class WebSocket {
 
         private final InputStream in;
 
@@ -84,6 +84,7 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
                 WebSocket.this.state = State.CONNECTING;
                 super.send(out);
                 WebSocket.this.state = State.OPEN;
+                WebSocket.this.onOpen();
                 readWebsocket();
             }
         };
@@ -95,7 +96,32 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
             this.handshakeResponse.addHeader(NanoWebSocketServer.HEADER_UPGRADE, NanoWebSocketServer.HEADER_UPGRADE_VALUE);
             this.handshakeResponse.addHeader(NanoWebSocketServer.HEADER_CONNECTION, NanoWebSocketServer.HEADER_CONNECTION_VALUE);
         }
-
+        
+        public boolean isOpen(){
+        	return state == State.OPEN;
+        }
+        
+        protected abstract void onOpen();
+        protected abstract void onClose(CloseCode code, String reason, boolean initiatedByRemote);
+        protected abstract void onMessage(WebSocketFrame message);
+        protected abstract void onPong(WebSocketFrame pong);
+        protected abstract void onException(IOException exception);
+        
+        /**
+         * Debug method. <b>Do not Override unless for debug purposes!</b>
+         * 
+         * @param frame The received WebSocket Frame.
+         */
+        protected void debugFrameReceived(WebSocketFrame frame){}
+        
+        /**
+         * Debug method. <b>Do not Override unless for debug purposes!</b><br>
+         * This method is called before actually sending the frame.
+         * 
+         * @param frame The sent WebSocket Frame.
+         */
+        protected void debugFrameSent(WebSocketFrame frame){}
+        
         public void close(CloseCode code, String reason, boolean initiatedByRemote) throws IOException {
             State oldState = this.state;
             this.state = State.CLOSING;
@@ -125,7 +151,7 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
                 }
             }
             this.state = State.CLOSED;
-            onClose(this, code, reason, initiatedByRemote);
+            onClose(code, reason, initiatedByRemote);
         }
 
         // --------------------------------IO--------------------------------------
@@ -167,7 +193,7 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
                 if (this.continuousOpCode == null) {
                     throw new WebSocketException(CloseCode.ProtocolError, "Continuous frame sequence was not started.");
                 }
-                onMessage(this, new WebSocketFrame(this.continuousOpCode, this.continuousFrames));
+                onMessage(new WebSocketFrame(this.continuousOpCode, this.continuousFrames));
                 this.continuousOpCode = null;
                 this.continuousFrames.clear();
             } else if (this.continuousOpCode == null) {
@@ -180,19 +206,19 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
         }
 
         private void handleWebsocketFrame(WebSocketFrame frame) throws IOException {
-            onFrameReceived(frame);
+            debugFrameReceived(frame);
             if (frame.getOpCode() == OpCode.Close) {
                 handleCloseFrame(frame);
             } else if (frame.getOpCode() == OpCode.Ping) {
                 sendFrame(new WebSocketFrame(OpCode.Pong, true, frame.getBinaryPayload()));
             } else if (frame.getOpCode() == OpCode.Pong) {
-                onPong(this, frame);
+                onPong(frame);
             } else if (!frame.isFin() || frame.getOpCode() == OpCode.Continuation) {
                 handleFrameFragment(frame);
             } else if (this.continuousOpCode != null) {
                 throw new WebSocketException(CloseCode.ProtocolError, "Continuous frame sequence not completed.");
             } else if (frame.getOpCode() == OpCode.Text || frame.getOpCode() == OpCode.Binary) {
-                onMessage(this, frame);
+                onMessage(frame);
             } else {
                 throw new WebSocketException(CloseCode.ProtocolError, "Non control or continuous frame expected.");
             }
@@ -213,10 +239,10 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
                     handleWebsocketFrame(WebSocketFrame.read(this.in));
                 }
             } catch (CharacterCodingException e) {
-                onException(this, e);
+                onException(e);
                 doClose(CloseCode.InvalidFramePayloadData, e.toString(), false);
             } catch (IOException e) {
-                onException(this, e);
+                onException(e);
                 if (e instanceof WebSocketException) {
                     doClose(((WebSocketException) e).getCode(), ((WebSocketException) e).getReason(), false);
                 }
@@ -234,7 +260,7 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
         }
 
         public synchronized void sendFrame(WebSocketFrame frame) throws IOException {
-            onSendFrame(frame);
+            debugFrameSent(frame);
             frame.write(this.out);
         }
     }
@@ -792,27 +818,9 @@ public abstract class NanoWebSocketServer extends NanoHTTPD {
         return isUpgrade && isCorrectConnection;
     }
 
-    protected abstract void onClose(WebSocket webSocket, CloseCode code, String reason, boolean initiatedByRemote);
-
-    protected abstract void onException(WebSocket webSocket, IOException e);
-
     // --------------------------------Listener--------------------------------
 
-    protected void onFrameReceived(WebSocketFrame webSocket) {
-        // only for debugging
-    }
-
-    protected abstract void onMessage(WebSocket webSocket, WebSocketFrame messageFrame);
-
-    protected abstract void onPong(WebSocket webSocket, WebSocketFrame pongFrame);
-
-    public void onSendFrame(WebSocketFrame webSocket) {
-        // only for debugging
-    }
-
-    public WebSocket openWebSocket(IHTTPSession handshake) {
-        return new WebSocket(handshake);
-    }
+    protected abstract WebSocket openWebSocket(IHTTPSession handshake);
 
     @Override
     public Response serve(final IHTTPSession session) {
